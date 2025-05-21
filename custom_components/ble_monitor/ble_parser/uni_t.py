@@ -18,10 +18,10 @@ def parse_uni_t(self, mfg: bytes, mac: bytes) -> dict | None:
     """Return dict with wind_speed (m/s) and temperature (°C)."""
     _LOGGER.debug(f"UNI-T raw mfg data: {mfg.hex()}")
     try:
-        txt = mfg[5:16].decode(errors="ignore")          # "  1.52M/S60"
+        txt = mfg[9:18].decode(errors="ignore")          # "1.52M/S60"
         sp_txt, uc_txt = txt.split("M/S")
         speed = float(sp_txt) * _FACTORS.get(int(uc_txt), 1.0)
-        temp  = round(int.from_bytes(mfg[16:18], "little") / 10.0, 1)
+        temp  = round(int.from_bytes(mfg[18:20], "little") / 44.5, 1)
         pkt   = mfg[3]
     except Exception as err:
         _LOGGER.debug("UNI‑T decode failed: %s", err)

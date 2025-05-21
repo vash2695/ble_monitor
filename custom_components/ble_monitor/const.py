@@ -2242,6 +2242,7 @@ AUTO_MANUFACTURER_DICT = {
     'Tilt Blue'               : 'Tilt',
     'Tilt Yellow'             : 'Tilt',
     'Tilt Pink'               : 'Tilt',
+    'UT363BT'                 : 'UNI-T',
     'MJWSD06MMC'              : 'Xiaomi',
     'MMC-W505'                : 'Xiaomi',
     'SJWS01LM'                : 'Xiaomi',

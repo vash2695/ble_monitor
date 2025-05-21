@@ -33,7 +33,20 @@ class TestUniTParser(unittest.TestCase):
         # mfg[16:18] = Temperature 28.3°C (sent as 283, little endian: 1B 01) (2 bytes)
         # mfg[18:21] = Padding (0x000000) (3 bytes for a total of 17 payload bytes)
         
-        mfg_data_hex = "14ffaabb002020322e37354d2f5335301b01000000" 
+        # Updated sample data based on user provided advertisement:
+        # mfg_data_hex = "14ffaabb1005372020312e35324d2f53363080046c"
+        # mfg[0] = 0x14 (data_len = 20 for type+compid+payload)
+        # mfg[1] = 0xFF (type)
+        # mfg[2:4] = 0xAABB (CompID: LSB AA, MSB BB -> comp_id value 0xBBAA)
+        # pkt = mfg[3] -> 0xBB
+        # mfg[4:9] = 0x1005372020 (skipped bytes by current parser logic for txt)
+        # mfg[9:18] = "1.52M/S60" (wind speed 1.52, unit code 60 = ft/min) (9 bytes)
+        #             Hex: 312E35324D2F533630
+        # mfg[18:20] = Temperature 25.9°C (sent as 1152 (0x0480), little endian: 80 04) (2 bytes)
+        #              Calculation: 1152 / 44.5 = 25.8876... -> rounded to 25.9
+        # mfg[20] = 0x6C (remaining byte, total 1+2+18 = 21 bytes in mfg, mfg[0]=20)
+        
+        mfg_data_hex = "14ffaabb1005372020312e35324d2f53363080046c"
         mfg_bytes = bytes.fromhex(mfg_data_hex)
         mac_bytes = bytes.fromhex("112233445566")
 
@@ -45,13 +58,13 @@ class TestUniTParser(unittest.TestCase):
         self.assertEqual(data["type"], "UNI‑T")
         self.assertEqual(data["firmware"], "UT363BT")
         self.assertEqual(data["mac"], "112233445566")
+
+        # Wind speed: 1.52 ft/min. Factor for ft/min (uc 60) is 0.00508
+        # Expected speed in m/s = 1.52 * 0.00508 = 0.0077216
+        self.assertAlmostEqual(data["wind_speed"], 1.52 * 0.00508, places=5)
         
-        # Wind speed: 2.75 km/h. Factor for km/h (uc 50) is 1/3.6
-        # Expected speed in m/s = 2.75 / 3.6 = 0.763888...
-        self.assertAlmostEqual(data["wind_speed"], 2.75 / 3.6, places=2) 
-        
-        # Temperature: 283 / 10.0 = 28.3
-        self.assertEqual(data["temperature"], 28.3)
+        # Temperature: 1152 / 44.5 = 25.8876... -> 25.9
+        self.assertEqual(data["temperature"], 25.9)
         
         self.assertEqual(data["packet"], 0xBB) # mfg[3] is 0xBB
         self.assertTrue(data["data"])
@@ -66,19 +79,24 @@ class TestUniTParser(unittest.TestCase):
     def test_uni_t_invalid_data_short(self):
         parser_self = BleParser(report_unknown=False, discovery=True, filter_duplicates=False)
         parser_self.rssi = -70
-        # mfg[0] = 0x10 (16), so total length 17. Payload is 16-1-2=13 bytes.
-        # String slice mfg[5:16] will be 11 bytes. Temp slice mfg[16:18] will be out of bounds.
-        mfg_bytes = bytes.fromhex("10ffaabb002020322e37354d") # Too short for temp parsing
+        # mfg[0] = 0x12 (18), so total length 19. mfg goes from index 0 to 18.
+        # String slice mfg[9:18] is mfg[9]...mfg[17] (9 bytes) - this is fine.
+        # Temp slice mfg[18:20] needs mfg[18] and mfg[19]. mfg[19] is out of bounds.
+        mfg_bytes = bytes.fromhex("12ffaabb" + "30"*15) # 15 bytes of '0x30' to make total payload 15+3 = 18 bytes for mfg[1:]
         mac_bytes = bytes.fromhex("112233445566")
         data = parse_uni_t(parser_self, mfg_bytes, mac_bytes)
         self.assertIsNone(data)
 
     def test_uni_t_string_decode_error_or_format(self):
         # Test if string parsing fails gracefully due to bad format (no M/S)
+        # Parser now uses mfg[9:18] for the string.
         parser_self = BleParser(report_unknown=False, discovery=True, filter_duplicates=False)
         parser_self.rssi = -70
-        # Valid length, but speed string part does not contain "M/S"
-        mfg_data_hex = "14ffaabb002020322e373520202020201b01000000" # "  2.75      " instead of M/S
+        # Valid length (mfg[0]=0x14 -> 21 bytes total).
+        # Original mfg_data_hex = "14ffaabb002020322e373520202020201b01000000"
+        # mfg[9:18] from this is "322e37352020202020" -> "2.75      "
+        # This doesn't contain "M/S", so txt.split("M/S") will fail.
+        mfg_data_hex = "14ffaabb002020322e373520202020201b01000000" 
         mfg_bytes = bytes.fromhex(mfg_data_hex)
         mac_bytes = bytes.fromhex("112233445566")
         data = parse_uni_t(parser_self, mfg_bytes, mac_bytes)
@@ -86,37 +104,14 @@ class TestUniTParser(unittest.TestCase):
 
     def test_uni_t_temp_parse_error(self):
         # Test if temperature parsing fails due to insufficient bytes after string
-        # String mfg[5:16] uses up to index 15. Temperature needs mfg[16] and mfg[17].
-        # If mfg[0] implies total length is too short for mfg[17]
+        # String mfg[9:18] uses up to index 17. Temperature needs mfg[18] and mfg[19].
+        # If mfg[0] implies total length is too short for mfg[19] (i.e. len(mfg) < 20)
         parser_self = BleParser(report_unknown=False, discovery=True, filter_duplicates=False)
         parser_self.rssi = -70
-        # mfg[0] = 0x13 (19). Total length 20. Payload 19-1-2 = 16 bytes.
-        # Payload mfg[4]...mfg[19].
-        # String mfg[5:16] (11 bytes) is fine (mfg[5]..mfg[15]).
-        # Temp mfg[16:18] needs mfg[16] and mfg[17]. This is fine.
-        # Let's make it one byte shorter: mfg[0] = 0x12 (18). Total length 19. Payload 15 bytes.
-        # Payload mfg[4]..mfg[18].
-        # String mfg[5:16] (11 bytes) is fine. (mfg[5]..mfg[15])
-        # Temp mfg[16:18] needs mfg[16], mfg[17]. mfg[17] is available.
-        # This should still work. What if mfg[0] = 0x11 (17). Total 18. Payload 14.
-        # Payload mfg[4]..mfg[17]. String mfg[5:16] fine. Temp mfg[16:18] needs mfg[16], mfg[17]. mfg[17] is available.
-        # The error is when mfg[16:18] slice itself is too short.
-        # This means len(mfg) must be at least 18.
-        # If mfg_bytes = bytes.fromhex("14ffaabb002020322e37354d2f5335301b") # Missing one byte for temp (total 20 bytes, mfg[0]=0x14)
-        # This will cause an error because `mfg[16:18]` will be shorter than 2 bytes if len(mfg) is 17, but here len(mfg) is 20.
-        # The check for `data_len == 0x14` is in `__init__`. The parser itself doesn't recheck length.
-        # The try-except in `parse_uni_t` should catch index errors.
-        
-        # This mfg_data has mfg[0]=0x14, so it's 21 bytes long.
-        # Slicing mfg[16:18] is fine. Error would be if mfg itself is too short.
-        # e.g. mfg_bytes is actually shorter than 18 bytes.
-        mfg_short_for_temp = bytes.fromhex("14ffaabb002020322e37354d2f5335301b") # Only 1 byte for temp
-        # This construction is faulty. The first byte 0x14 dictates expected length of 21.
-        # The test should be that the actual mfg_bytes is too short.
-        
+
+        # mfg_bytes_actually_short is 17 bytes long (indices 0-16).
+        # Accessing mfg[18:20] will cause an IndexError because mfg[18] is out of bounds.
         mfg_bytes_actually_short = bytes.fromhex("AABBCCDDEEFF00112233445566778899AA") # 17 bytes long
-        # This will fail int.from_bytes(mfg[16:18]... if mfg is only 17 bytes long, mfg[16] is last byte, mfg[17] is OOB.
-        
         mac_bytes = bytes.fromhex("112233445566")
         data = parse_uni_t(parser_self, mfg_bytes_actually_short, mac_bytes)
         self.assertIsNone(data)

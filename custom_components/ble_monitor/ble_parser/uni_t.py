@@ -27,10 +27,11 @@ def parse_uni_t(self, mfg: bytes, mac: bytes) -> dict | None:
         _LOGGER.debug("UNI‑T decode failed: %s", err)
         return None
 
+    device_type = "UT363BT"
     return {
         "mac":         to_unformatted_mac(mac),
-        "type":        "UNI‑T",
-        "firmware":    "UT363BT",
+        "type":        device_type,
+        "firmware":    device_type,
         "packet":      pkt,
         "wind_speed":  round(speed, 2),
         "temperature": temp,
